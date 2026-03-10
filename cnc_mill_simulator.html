@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>3D G-code CNCフライス盤シミュレーター</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0d0f14;color:#c8d0e0;font-family:'Consolas',monospace;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+#topbar{background:#151820;border-bottom:1px solid #2a2f3d;padding:6px 12px;display:flex;align-items:center;gap:16px;flex-shrink:0;flex-wrap:wrap}
+#topbar h1{font-size:13px;color:#7eb8f7;letter-spacing:1px;white-space:nowrap}
+.setting-group{display:flex;align-items:center;gap:6px;font-size:11px}
+.setting-group label{color:#8892a4;white-space:nowrap}
+.setting-group input{background:#0d0f14;border:1px solid #2a3040;color:#c8d0e0;padding:2px 6px;width:56px;border-radius:3px;font-size:11px}
+.sep{width:1px;height:20px;background:#2a2f3d}
+#main{display:flex;flex:1;overflow:hidden}
+#left-panel{width:340px;min-width:200px;display:flex;flex-direction:column;background:#111318;border-right:1px solid #1e2330;flex-shrink:0}
+#editor-header{padding:6px 10px;background:#151820;border-bottom:1px solid #1e2330;font-size:11px;color:#7eb8f7;display:flex;justify-content:space-between;align-items:center}
+#gcode-container{flex:1;overflow:auto;position:relative}
+#gcode-lines{width:100%;min-height:100%}
+.gcode-line{display:flex;cursor:pointer;transition:background 0.1s;min-height:18px}
+.gcode-line:hover{background:#1a1f2e}
+.gcode-line.active{background:#1a2a1a;border-left:2px solid #4caf50}
+.gcode-line.selected{background:#1e2a3a;border-left:2px solid #7eb8f7}
+.line-num{width:42px;text-align:right;padding-right:8px;color:#3a4050;font-size:10px;flex-shrink:0;padding-top:1px}
+.line-code{flex:1;font-size:11px;padding:1px 4px;white-space:pre}
+.line-code.rapid{color:#5bc8f5}
+.line-code.cut{color:#a0d870}
+.line-code.arc{color:#f0b840}
+.line-code.misc{color:#9988cc}
+#bottom-bar{padding:6px 10px;background:#0d1018;border-top:1px solid #1e2330;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.btn{padding:4px 12px;border:1px solid #2a3a50;background:#151d2a;color:#7eb8f7;border-radius:4px;cursor:pointer;font-size:11px;transition:all 0.15s}
+.btn:hover{background:#1e2d42;border-color:#4a6a80}
+.btn.active{background:#1a3a1a;border-color:#4caf50;color:#80d860}
+.btn.stop{border-color:#5a2020;color:#f07060}
+.btn.stop:hover{background:#3a1a1a}
+#speed-label{font-size:11px;color:#5a6070}
+#speed-slider{width:80px;accent-color:#7eb8f7}
+#status{font-size:10px;color:#5a7a5a;flex:1;text-align:right}
+#right-panel{flex:1;position:relative;overflow:hidden}
+#canvas-3d{width:100%;height:100%;display:block}
+#info-overlay{position:absolute;bottom:10px;left:10px;font-size:10px;color:#3a4a5a;pointer-events:none}
+#axis-label{position:absolute;top:10px;right:10px;font-size:10px;color:#5a6a7a;pointer-events:none}
+#tool-pos{position:absolute;top:10px;left:10px;font-size:11px;color:#6a9a6a;background:rgba(0,0,0,0.5);padding:4px 8px;border-radius:4px;pointer-events:none}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <h1>⚙ CNC Mill Sim</h1>
+  <div class="sep"></div>
+  <div class="setting-group"><label>材料X</label><input type="number" id="wp-x" value="100" min="1"></div>
+  <div class="setting-group"><label>Y</label><input type="number" id="wp-y" value="80" min="1"></div>
+  <div class="setting-group"><label>Z</label><input type="number" id="wp-z" value="30" min="1"></div>
+  <div class="sep"></div>
+  <div class="setting-group"><label>原点X</label><input type="number" id="ori-x" value="0"></div>
+  <div class="setting-group"><label>Y</label><input type="number" id="ori-y" value="0"></div>
+  <div class="setting-group"><label>Z</label><input type="number" id="ori-z" value="0"></div>
+  <div class="sep"></div>
+  <div class="setting-group"><label>工具径φ</label><input type="number" id="tool-dia" value="6" min="0.1" step="0.5"></div>
+</div>
+<div id="main">
+  <div id="left-panel">
+    <div id="editor-header">
+      <span>G-code エディタ</span>
+      <span style="color:#3a4a5a;font-size:10px">行クリック→その行から実行</span>
+    </div>
+    <div id="gcode-container"><div id="gcode-lines"></div></div>
+    <div id="bottom-bar">
+      <button class="btn" id="btn-play">▶ 実行</button>
+      <button class="btn stop" id="btn-stop">■ 停止</button>
+      <button class="btn" id="btn-reset">↺ リセット</button>
+      <label id="speed-label">速度</label>
+      <input type="range" id="speed-slider" min="1" max="50" value="10">
+      <div id="status">待機中</div>
+    </div>
+  </div>
+  <div id="right-panel">
+    <canvas id="canvas-3d"></canvas>
+    <div id="tool-pos">X: 0.000  Y: 0.000  Z: 0.000</div>
+    <div id="info-overlay">OrbitControls: 左ドラッグ=回転 / 右=移動 / ホイール=ズーム</div>
+    <div id="axis-label">mm単位</div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ─────────────────────────────────────────────
+// グローバル変数
+// ─────────────────────────────────────────────
+const SCALE = 0.1; // mm → three.js単位 (1mm = 0.1)
+let scene, camera, renderer, controls;
+let workpieceMesh, toolMesh, toolGroup;
+let pathLine, pathPoints = [];
+let cutMarks = []; // カット跡メッシュ群
+let animFrameId = null;
+let isPlaying = false;
+let gcodeLines = [];
+let parsedMoves = [];
+let currentMoveIdx = 0;
+let startMoveIdx = 0;
+let moveProgress = 0;
+let feedrate = 100; // mm/min
+let toolDiam = 6;
+let wpSize = {x:100, y:80, z:30};
+let wpOrigin = {x:0, y:0, z:0};
+let toolPos = {x:0, y:0, z:50}; // 初期Z高め
+let lastToolPos = {x:0, y:0, z:50};
+let cutGeomMerge = null;
+let cutBatchPending = [];
+let cutBatchTimer = null;
+
+// ─────────────────────────────────────────────
+// デフォルトGコード
+// ─────────────────────────────────────────────
+const DEFAULT_GCODE = `; 3D CNCフライス盤シミュレーター サンプルプログラム
+G21 ; mmモード
+G90 ; 絶対座標
+G17 ; XY平面
+T1 M6 ; 工具交換
+S3000 M3 ; 主軸回転
+
+; === ポケット加工 ===
+G0 Z5.0
+G0 X10 Y10
+G1 Z-3.0 F200
+G1 X90 F500
+G1 Y70
+G1 X10
+G1 Y10
+G0 Z5.0
+
+; === 内側ポケット ===
+G0 X20 Y20
+G1 Z-5.0 F200
+G1 X80 F500
+G1 Y60
+G1 X20
+G1 Y20
+G0 Z5.0
+
+; === ジグザグ荒加工 ===
+G0 X15 Y25
+G1 Z-8.0 F150
+G1 X85 F800
+G1 Y35
+G1 X15
+G1 Y45
+G1 X85
+G1 Y55
+G1 X15
+G0 Z5.0
+
+; === 円弧パス ===
+G0 X50 Y40
+G1 Z-6.0 F200
+G2 X50 Y40 I20 J0 F600
+G2 X50 Y40 I15 J0
+G2 X50 Y40 I10 J0
+G0 Z5.0
+
+; === 仕上げ輪郭 ===
+G0 X5 Y5
+G1 Z-2.0 F200
+G1 X95 F600
+G1 Y75
+G1 X5
+G1 Y5
+G0 Z10.0
+
+M30`;
+
+// ─────────────────────────────────────────────
+// Three.js 初期化
+// ─────────────────────────────────────────────
+function initThree() {
+  const canvas = document.getElementById('canvas-3d');
+  renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.setClearColor(0x0a0c12);
+
+  scene = new THREE.Scene();
+  scene.fog = new THREE.Fog(0x0a0c12, 80, 300);
+
+  camera = new THREE.PerspectiveCamera(45, 1, 0.1, 2000);
+  camera.position.set(15, -18, 20);
+  camera.up.set(0, 0, 1);
+
+  controls = new OrbitControls(camera, canvas);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.target.set(5, 4, 0);
+  controls.update();
+
+  // 照明
+  const ambient = new THREE.AmbientLight(0x304060, 1.5);
+  scene.add(ambient);
+  const sun = new THREE.DirectionalLight(0xffffff, 2.5);
+  sun.position.set(20, -10, 30);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  scene.add(sun);
+  const fill = new THREE.DirectionalLight(0x4080c0, 0.8);
+  fill.position.set(-15, 20, 5);
+  scene.add(fill);
+  const rim = new THREE.DirectionalLight(0x80c0ff, 0.4);
+  rim.position.set(0, -20, -5);
+  scene.add(rim);
+
+  // グリッド (XY平面)
+  const grid = new THREE.GridHelper(400, 80, 0x1a2030, 0x141820);
+  grid.rotation.x = Math.PI/2;
+  grid.position.z = -0.05;
+  scene.add(grid);
+
+  // 座標軸
+  const axesHelper = new THREE.AxesHelper(8);
+  scene.add(axesHelper);
+
+  buildWorkpiece();
+  buildTool();
+  buildPathLine();
+
+  resizeRenderer();
+  window.addEventListener('resize', resizeRenderer);
+  renderLoop();
+}
+
+function resizeRenderer() {
+  const el = document.getElementById('right-panel');
+  const w = el.clientWidth, h = el.clientHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w/h;
+  camera.updateProjectionMatrix();
+}
+
+function renderLoop() {
+  animFrameId = requestAnimationFrame(renderLoop);
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+// ─────────────────────────────────────────────
+// ワークピース構築
+// ─────────────────────────────────────────────
+function buildWorkpiece() {
+  if (workpieceMesh) { scene.remove(workpieceMesh); workpieceMesh.geometry.dispose(); }
+  const sx = wpSize.x * SCALE;
+  const sy = wpSize.y * SCALE;
+  const sz = wpSize.z * SCALE;
+  const geo = new THREE.BoxGeometry(sx, sy, sz, Math.ceil(sx*2), Math.ceil(sy*2), Math.ceil(sz*2));
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x3a8a9a,
+    roughness: 0.6,
+    metalness: 0.4,
+    side: THREE.FrontSide,
+  });
+  workpieceMesh = new THREE.Mesh(geo, mat);
+  workpieceMesh.position.set(
+    (wpOrigin.x + wpSize.x/2) * SCALE,
+    (wpOrigin.y + wpSize.y/2) * SCALE,
+    (wpOrigin.z - wpSize.z/2) * SCALE
+  );
+  workpieceMesh.receiveShadow = true;
+  workpieceMesh.castShadow = true;
+  scene.add(workpieceMesh);
+
+  // カット跡グループをリセット
+  cutMarks.forEach(m => { scene.remove(m); m.geometry.dispose(); });
+  cutMarks = [];
+
+  // カメラターゲットを中心に
+  controls.target.set(
+    (wpOrigin.x + wpSize.x/2)*SCALE,
+    (wpOrigin.y + wpSize.y/2)*SCALE,
+    0
+  );
+  controls.update();
+}
+
+// ─────────────────────────────────────────────
+// 工具メッシュ構築
+// ─────────────────────────────────────────────
+function buildTool() {
+  if (toolGroup) scene.remove(toolGroup);
+  toolGroup = new THREE.Group();
+
+  const r = (toolDiam/2) * SCALE;
+  const toolLen = 4 * SCALE;
+  const holderLen = 3 * SCALE;
+  const colletLen = 2 * SCALE;
+
+  // フルート(刃)部
+  const fluteGeo = new THREE.CylinderGeometry(r, r, toolLen, 16);
+  const fluteMat = new THREE.MeshStandardMaterial({color:0xff6030, roughness:0.3, metalness:0.8});
+  const flute = new THREE.Mesh(fluteGeo, fluteMat);
+  flute.rotation.x = Math.PI/2;
+  flute.position.z = -toolLen/2;
+  flute.castShadow = true;
+  toolGroup.add(flute);
+
+  // チップ(先端)
+  const tipGeo = new THREE.CylinderGeometry(0, r, r*2, 16);
+  const tipMat = new THREE.MeshStandardMaterial({color:0xff8040, roughness:0.2, metalness:0.9});
+  const tip = new THREE.Mesh(tipGeo, tipMat);
+  tip.rotation.x = Math.PI/2;
+  tip.position.z = -toolLen - r;
+  tip.castShadow = true;
+  toolGroup.add(tip);
+
+  // コレット
+  const colGeo = new THREE.CylinderGeometry(r*1.6, r*1.3, colletLen, 16);
+  const colMat = new THREE.MeshStandardMaterial({color:0x8899aa, roughness:0.4, metalness:0.7});
+  const col = new THREE.Mesh(colGeo, colMat);
+  col.rotation.x = Math.PI/2;
+  col.position.z = colletLen/2;
+  col.castShadow = true;
+  toolGroup.add(col);
+
+  // ホルダー
+  const holGeo = new THREE.CylinderGeometry(r*2, r*1.6, holderLen, 12);
+  const holMat = new THREE.MeshStandardMaterial({color:0x556677, roughness:0.5, metalness:0.6});
+  const hol = new THREE.Mesh(holGeo, holMat);
+  hol.rotation.x = Math.PI/2;
+  hol.position.z = colletLen + holderLen/2;
+  hol.castShadow = true;
+  toolGroup.add(hol);
+
+  toolMesh = flute;
+  scene.add(toolGroup);
+  updateToolMeshPos();
+}
+
+function updateToolMeshPos() {
+  if (!toolGroup) return;
+  toolGroup.position.set(
+    toolPos.x * SCALE,
+    toolPos.y * SCALE,
+    toolPos.z * SCALE
+  );
+  // DRO更新
+  document.getElementById('tool-pos').textContent =
+    `X: ${toolPos.x.toFixed(3)}  Y: ${toolPos.y.toFixed(3)}  Z: ${toolPos.z.toFixed(3)}`;
+}
+
+// ─────────────────────────────────────────────
+// ツールパスライン構築
+// ─────────────────────────────────────────────
+function buildPathLine() {
+  if (pathLine) scene.remove(pathLine);
+  const geo = new THREE.BufferGeometry();
+  const positions = new Float32Array(3000);
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setDrawRange(0, 0);
+  const mat = new THREE.LineBasicMaterial({color:0x20c040, transparent:true, opacity:0.6});
+  pathLine = new THREE.Line(geo, mat);
+  scene.add(pathLine);
+  pathPoints = [];
+}
+
+function addPathPoint(x, y, z) {
+  pathPoints.push(x*SCALE, y*SCALE, z*SCALE);
+  const maxPts = 3000;
+  const pos = pathLine.geometry.attributes.position;
+  const arr = pos.array;
+  const n = Math.min(pathPoints.length, maxPts);
+  for (let i=0; i<n; i++) arr[i] = pathPoints[pathPoints.length-n+i];
+  pos.needsUpdate = true;
+  pathLine.geometry.setDrawRange(0, n/3);
+}
+
+// ─────────────────────────────────────────────
+// Gコードパーサー
+// ─────────────────────────────────────────────
+function parseGcode(text) {
+  const lines = text.split('\n');
+  const moves = [];
+  let cx=0, cy=0, cz=0, cf=200, modal='G1', absMode=true;
+  let subprograms = {}; // O番号→行配列
+  let inSub = null;
+  let subLines = {};
+
+  // サブプログラム収集
+  lines.forEach((raw, idx) => {
+    const line = raw.replace(/;.*/,'').trim().toUpperCase();
+    const oMatch = line.match(/^O(\d+)/);
+    if (oMatch) { inSub = oMatch[1]; subprograms[inSub]=[]; }
+    if (inSub) { subprograms[inSub].push(line); }
+    if (line.includes('M99')) inSub = null;
+  });
+
+  function parseLine(line, lineNum, srcLines) {
+    line = line.replace(/;.*/,'').replace(/\(.*/,'').trim().toUpperCase();
+    if (!line) return;
+
+    const getVal = (letter) => {
+      const m = line.match(new RegExp(letter+'([+-]?[\\d.]+)'));
+      return m ? parseFloat(m[1]) : null;
+    };
+
+    // M98サブルーチン呼び出し
+    if (/M98/.test(line)) {
+      const pNum = getVal('P');
+      if (pNum && subprograms[String(pNum)]) {
+        subprograms[String(pNum)].forEach((sl, si) => parseLine(sl, lineNum, srcLines));
+      }
+      return;
+    }
+
+    // モーダルGコード更新
+    if (/G0\b/.test(line)||/G00\b/.test(line)) modal='G0';
+    else if (/G1\b/.test(line)||/G01\b/.test(line)) modal='G1';
+    else if (/G2\b/.test(line)||/G02\b/.test(line)) modal='G2';
+    else if (/G3\b/.test(line)||/G03\b/.test(line)) modal='G3';
+    else if (/G90\b/.test(line)) { absMode=true; return; }
+    else if (/G91\b/.test(line)) { absMode=false; return; }
+    else if (/G21\b/.test(line)||/G20\b/.test(line)||/G17\b/.test(line)) return;
+    else if (/M30\b/.test(line)||/M2\b/.test(line)) { moves.push({type:'end',lineNum}); return; }
+    else if (/M/.test(line)||/T/.test(line)||/S/.test(line)||/G/.test(line.replace(/G[012][0-9]/g,''))) {
+      if (!/X|Y|Z/.test(line)) return;
+    }
+
+    const xv = getVal('X'), yv = getVal('Y'), zv = getVal('Z'), fv = getVal('F');
+    const iv = getVal('I'), jv = getVal('J'), rv = getVal('R');
+    if (fv !== null) cf = fv;
+
+    const nx = xv!==null ? (absMode ? xv : cx+xv) : cx;
+    const ny = yv!==null ? (absMode ? yv : cy+yv) : cy;
+    const nz = zv!==null ? (absMode ? zv : cz+zv) : cz;
+
+    if (nx===cx && ny===cy && nz===cz) return;
+
+    if (modal==='G0') {
+      moves.push({type:'rapid', x:nx, y:ny, z:nz, lineNum});
+    } else if (modal==='G1') {
+      moves.push({type:'cut', x:nx, y:ny, z:nz, f:cf, lineNum});
+    } else if (modal==='G2'||modal==='G3') {
+      const ccw = modal==='G3';
+      const ci = (iv||0)+cx, cj = (jv||0)+cy;
+      // 円弧を小線分に分解
+      const arcMoves = expandArc(cx, cy, cz, nx, ny, nz, ci, cj, ccw, cf, lineNum);
+      arcMoves.forEach(m => moves.push(m));
+    }
+
+    cx=nx; cy=ny; cz=nz;
+  }
+
+  lines.forEach((raw, idx) => {
+    if (/^O\d+/.test(raw.trim().toUpperCase())) return;
+    parseLine(raw, idx, lines);
+  });
+
+  return moves;
+}
+
+function expandArc(x0,y0,z0, x1,y1,z1, cx,cy, ccw, f, lineNum) {
+  const r = Math.hypot(x0-cx, y0-cy);
+  const a0 = Math.atan2(y0-cy, x0-cx);
+  const a1 = Math.atan2(y1-cy, x1-cx);
+  let sweep = ccw ? a1-a0 : a0-a1;
+  if (sweep <= 0) sweep += Math.PI*2;
+  if (sweep > Math.PI*2-0.0001) sweep = Math.PI*2;
+  const segments = Math.max(8, Math.ceil(r * sweep / 2));
+  const moves = [];
+  for (let i=1; i<=segments; i++) {
+    const t = i/segments;
+    const a = ccw ? a0+sweep*t : a0-sweep*t;
+    const px = cx + r*Math.cos(a);
+    const py = cy + r*Math.sin(a);
+    const pz = z0 + (z1-z0)*t;
+    moves.push({type:'cut', x:px, y:py, z:pz, f, lineNum});
+  }
+  return moves;
+}
+
+// ─────────────────────────────────────────────
+// カット跡生成（疑似体積削除）
+// ─────────────────────────────────────────────
+function addCutMark(x, y, z) {
+  const zTop = wpOrigin.z;
+  if (z >= zTop) return; // ワーク上面より上は削らない
+
+  const r = (toolDiam/2) * SCALE;
+  const depth = Math.max(0.5, zTop - z) * SCALE;
+
+  // 円柱形のカット跡を追加
+  const geo = new THREE.CylinderGeometry(r, r, depth, 10, 1, false);
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x1a5a6a,
+    roughness: 0.9,
+    metalness: 0.3,
+    side: THREE.FrontSide,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.rotation.x = Math.PI/2;
+  mesh.position.set(x*SCALE, y*SCALE, (zTop - depth/(2*SCALE)) * SCALE);
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+  cutMarks.push(mesh);
+
+  // メモリ節約：最大3000個
+  if (cutMarks.length > 3000) {
+    const old = cutMarks.shift();
+    scene.remove(old);
+    old.geometry.dispose();
+  }
+}
+
+// ─────────────────────────────────────────────
+// シミュレーションループ
+// ─────────────────────────────────────────────
+let lastTime = 0;
+let simFrameId = null;
+let cutAccum = 0;
+const CUT_INTERVAL = 0.8; // カット跡を置く間隔 (mm)
+
+function startSim() {
+  if (simFrameId) cancelAnimationFrame(simFrameId);
+  isPlaying = true;
+  document.getElementById('btn-play').classList.add('active');
+  setStatus('実行中...');
+  lastTime = performance.now();
+  cutAccum = 0;
+  simStep();
+}
+
+function stopSim() {
+  if (simFrameId) cancelAnimationFrame(simFrameId);
+  simFrameId = null;
+  isPlaying = false;
+  document.getElementById('btn-play').classList.remove('active');
+  setStatus('停止');
+}
+
+function simStep() {
+  const now = performance.now();
+  const dt = Math.min((now - lastTime)/1000, 0.1); // 最大100ms
+  lastTime = now;
+
+  const speedMult = parseFloat(document.getElementById('speed-slider').value);
+
+  if (currentMoveIdx >= parsedMoves.length) {
+    stopSim();
+    setStatus('完了');
+    return;
+  }
+
+  const move = parsedMoves[currentMoveIdx];
+  if (move.type === 'end') { stopSim(); setStatus('M30: プログラム終了'); return; }
+
+  const tx = move.x, ty = move.y, tz = move.z;
+  const isCut = move.type === 'cut';
+  const speed = isCut ? (move.f||200) : 5000; // rapid=高速
+  const dist3d = Math.hypot(tx-toolPos.x, ty-toolPos.y, tz-toolPos.z);
+
+  if (dist3d < 0.001) {
+    currentMoveIdx++;
+    highlightLine(move.lineNum);
+    simFrameId = requestAnimationFrame(simStep);
+    return;
+  }
+
+  const travelMM = speed * speedMult * dt / 60; // mm/frame
+  const fraction = Math.min(travelMM / dist3d, 1);
+
+  const prevX = toolPos.x, prevY = toolPos.y, prevZ = toolPos.z;
+  toolPos.x = prevX + (tx-prevX)*fraction;
+  toolPos.y = prevY + (ty-prevY)*fraction;
+  toolPos.z = prevZ + (tz-prevZ)*fraction;
+
+  updateToolMeshPos();
+  addPathPoint(toolPos.x, toolPos.y, toolPos.z);
+
+  if (isCut) {
+    const stepDist = Math.hypot(toolPos.x-prevX, toolPos.y-prevY, toolPos.z-prevZ);
+    cutAccum += stepDist;
+    if (cutAccum >= CUT_INTERVAL) {
+      cutAccum = 0;
+      addCutMark(toolPos.x, toolPos.y, toolPos.z);
+    }
+  }
+
+  if (fraction >= 1) {
+    currentMoveIdx++;
+    highlightLine(move.lineNum);
+  }
+
+  simFrameId = requestAnimationFrame(simStep);
+}
+
+// ─────────────────────────────────────────────
+// UIヘルパー
+// ─────────────────────────────────────────────
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+
+function highlightLine(lineNum) {
+  document.querySelectorAll('.gcode-line').forEach(el => el.classList.remove('active'));
+  const el = document.querySelector(`.gcode-line[data-line="${lineNum}"]`);
+  if (el) {
+    el.classList.add('active');
+    el.scrollIntoView({block:'nearest', behavior:'smooth'});
+  }
+}
+
+function classifyLine(code) {
+  if (!code || /^[;%]/.test(code.trim())) return 'misc';
+  const u = code.toUpperCase();
+  if (/G0\b|G00\b/.test(u)) return 'rapid';
+  if (/G1\b|G01\b/.test(u)) return 'cut';
+  if (/G2\b|G02\b|G3\b|G03\b/.test(u)) return 'arc';
+  return 'misc';
+}
+
+function renderGcodeEditor(text) {
+  const lines = text.split('\n');
+  gcodeLines = lines;
+  const container = document.getElementById('gcode-lines');
+  container.innerHTML = '';
+  lines.forEach((line, idx) => {
+    const div = document.createElement('div');
+    div.className = 'gcode-line';
+    div.dataset.line = idx;
+    div.innerHTML = `<span class="line-num">${idx+1}</span><span class="line-code ${classifyLine(line)}">${escHtml(line)||' '}</span>`;
+    div.addEventListener('click', () => {
+      document.querySelectorAll('.gcode-line').forEach(e=>e.classList.remove('selected'));
+      div.classList.add('selected');
+      stopSim();
+      // クリックした行に対応するMove indexを探す
+      const targetLineNum = idx;
+      let found = false;
+      for (let i=0; i<parsedMoves.length; i++) {
+        if (parsedMoves[i].lineNum >= targetLineNum) {
+          startMoveIdx = i;
+          currentMoveIdx = i;
+          found = true;
+          break;
+        }
+      }
+      if (!found) { startMoveIdx = 0; currentMoveIdx = 0; }
+      // 工具位置を開始点にセット
+      if (parsedMoves[currentMoveIdx]) {
+        const m = parsedMoves[Math.max(0,currentMoveIdx-1)];
+        if (m) { toolPos.x=m.x||0; toolPos.y=m.y||0; toolPos.z=m.z||10; updateToolMeshPos(); }
+      }
+      setStatus(`行 ${idx+1} から開始`);
+    });
+    container.appendChild(div);
+  });
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function resetSim() {
+  stopSim();
+  currentMoveIdx = 0;
+  startMoveIdx = 0;
+  toolPos = {x:0, y:0, z:wpSize.z+10};
+  pathPoints = [];
+  buildPathLine();
+  buildWorkpiece();
+  updateToolMeshPos();
+  setStatus('リセット完了');
+}
+
+// ─────────────────────────────────────────────
+// ワーク設定変更
+// ─────────────────────────────────────────────
+function readWorkpieceSettings() {
+  wpSize.x = parseFloat(document.getElementById('wp-x').value)||100;
+  wpSize.y = parseFloat(document.getElementById('wp-y').value)||80;
+  wpSize.z = parseFloat(document.getElementById('wp-z').value)||30;
+  wpOrigin.x = parseFloat(document.getElementById('ori-x').value)||0;
+  wpOrigin.y = parseFloat(document.getElementById('ori-y').value)||0;
+  wpOrigin.z = parseFloat(document.getElementById('ori-z').value)||0;
+  toolDiam = parseFloat(document.getElementById('tool-dia').value)||6;
+}
+
+['wp-x','wp-y','wp-z','ori-x','ori-y','ori-z','tool-dia'].forEach(id => {
+  document.getElementById(id).addEventListener('change', () => {
+    readWorkpieceSettings();
+    buildWorkpiece();
+    buildTool();
+    parsedMoves = parseGcode(gcodeLines.join('\n'));
+  });
+});
+
+// ─────────────────────────────────────────────
+// ボタン
+// ─────────────────────────────────────────────
+document.getElementById('btn-play').addEventListener('click', () => {
+  if (!isPlaying) startSim();
+});
+document.getElementById('btn-stop').addEventListener('click', stopSim);
+document.getElementById('btn-reset').addEventListener('click', resetSim);
+
+// ─────────────────────────────────────────────
+// 起動
+// ─────────────────────────────────────────────
+readWorkpieceSettings();
+initThree();
+renderGcodeEditor(DEFAULT_GCODE);
+parsedMoves = parseGcode(DEFAULT_GCODE);
+toolPos = {x:0, y:0, z: wpSize.z + 10};
+updateToolMeshPos();
+setStatus('Gコードをロード済み。▶ を押して実行');
+
+</script>
+</body>
+</html>
