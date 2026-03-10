@@ -13,8 +13,25 @@ body{background:#0d0f14;color:#c8d0e0;font-family:'Consolas',monospace;display:f
 .setting-group input{background:#0d0f14;border:1px solid #2a3040;color:#c8d0e0;padding:2px 6px;width:56px;border-radius:3px;font-size:11px}
 .sep{width:1px;height:20px;background:#2a2f3d}
 #main{display:flex;flex:1;overflow:hidden}
-#left-panel{width:340px;min-width:200px;display:flex;flex-direction:column;background:#111318;border-right:1px solid #1e2330;flex-shrink:0}
-#editor-header{padding:6px 10px;background:#151820;border-bottom:1px solid #1e2330;font-size:11px;color:#7eb8f7;display:flex;justify-content:space-between;align-items:center}
+#left-panel{width:360px;min-width:220px;display:flex;flex-direction:column;background:#111318;border-right:1px solid #1e2330;flex-shrink:0}
+#editor-tabs{display:flex;background:#0d0f14;border-bottom:1px solid #1e2330;flex-shrink:0}
+.tab-btn{flex:1;padding:6px 0;font-size:11px;border:none;background:transparent;color:#5a6a7a;cursor:pointer;border-bottom:2px solid transparent;transition:all 0.15s}
+.tab-btn.active{color:#7eb8f7;border-bottom:2px solid #7eb8f7;background:#111318}
+.tab-btn:hover{color:#a0b8d0}
+#tab-edit{display:flex;flex-direction:column;flex:1;overflow:hidden}
+#tab-view{display:none;flex-direction:column;flex:1;overflow:hidden}
+#tab-edit.shown{display:flex}
+#tab-view.shown{display:flex}
+/* テキストエリア編集ペイン */
+#editor-wrapper{flex:1;display:flex;overflow:hidden;position:relative}
+#line-numbers{width:38px;background:#0d0f14;color:#3a4858;font-size:11px;padding:4px 0;text-align:right;overflow:hidden;flex-shrink:0;line-height:1.6;user-select:none;border-right:1px solid #1a2030}
+#line-numbers span{display:block;padding-right:6px}
+#gcode-textarea{flex:1;background:#111318;color:#c8d0e0;font-family:'Consolas',monospace;font-size:11px;border:none;outline:none;resize:none;padding:4px 8px;line-height:1.6;tab-size:2;overflow-y:auto}
+#gcode-textarea::selection{background:#2a4060}
+#editor-actions{padding:4px 8px;background:#0d0f14;border-top:1px solid #1a2030;display:flex;gap:6px;flex-shrink:0}
+.ea-btn{padding:3px 10px;border:1px solid #2a3a50;background:#151d2a;color:#7eb8f7;border-radius:3px;cursor:pointer;font-size:10px}
+.ea-btn:hover{background:#1e2d42}
+/* ハイライト行表示ペイン */
 #gcode-container{flex:1;overflow:auto;position:relative}
 #gcode-lines{width:100%;min-height:100%}
 .gcode-line{display:flex;cursor:pointer;transition:background 0.1s;min-height:18px}
@@ -59,11 +76,26 @@ body{background:#0d0f14;color:#c8d0e0;font-family:'Consolas',monospace;display:f
 </div>
 <div id="main">
   <div id="left-panel">
-    <div id="editor-header">
-      <span>G-code エディタ</span>
-      <span style="color:#3a4a5a;font-size:10px">行クリック→その行から実行</span>
+    <!-- タブ切り替え -->
+    <div id="editor-tabs">
+      <button class="tab-btn active" id="tab-edit-btn" onclick="switchTab('edit')">✏ 編集</button>
+      <button class="tab-btn" id="tab-view-btn" onclick="switchTab('view')">▤ シミュレート</button>
     </div>
-    <div id="gcode-container"><div id="gcode-lines"></div></div>
+    <!-- 編集タブ：textarea -->
+    <div id="tab-edit" class="shown">
+      <div id="editor-wrapper">
+        <div id="line-numbers"></div>
+        <textarea id="gcode-textarea" spellcheck="false" autocomplete="off" autocorrect="off"></textarea>
+      </div>
+      <div id="editor-actions">
+        <button class="ea-btn" onclick="applyGcode()">▶ 適用してシミュレートタブへ</button>
+        <button class="ea-btn" onclick="clearEditor()">✕ クリア</button>
+      </div>
+    </div>
+    <!-- シミュレートタブ：行クリック -->
+    <div id="tab-view">
+      <div id="gcode-container"><div id="gcode-lines"></div></div>
+    </div>
     <div id="bottom-bar">
       <button class="btn" id="btn-play">▶ 実行</button>
       <button class="btn stop" id="btn-stop">■ 停止</button>
@@ -623,9 +655,49 @@ function classifyLine(code) {
   return 'misc';
 }
 
+// ─────────────────────────────────────────────
+// タブ切り替え
+// ─────────────────────────────────────────────
+window.switchTab = function(tab) {
+  document.getElementById('tab-edit').classList.toggle('shown', tab==='edit');
+  document.getElementById('tab-view').classList.toggle('shown', tab==='view');
+  document.getElementById('tab-edit-btn').classList.toggle('active', tab==='edit');
+  document.getElementById('tab-view-btn').classList.toggle('active', tab==='view');
+};
+
+window.applyGcode = function() {
+  const text = document.getElementById('gcode-textarea').value;
+  renderGcodeEditor(text);
+  parsedMoves = parseGcode(text);
+  resetSim();
+  switchTab('view');
+  setStatus(`${parsedMoves.length} 移動をパース済み。行クリックまたは▶で実行`);
+};
+
+window.clearEditor = function() {
+  if (confirm('エディタの内容をクリアしますか？')) {
+    document.getElementById('gcode-textarea').value = '';
+    updateLineNumbers();
+  }
+};
+
+function updateLineNumbers() {
+  const ta = document.getElementById('gcode-textarea');
+  const ln = document.getElementById('line-numbers');
+  const lines = ta.value.split('\n');
+  ln.innerHTML = lines.map((_,i) => `<span>${i+1}</span>`).join('');
+  // スクロール同期
+  ln.scrollTop = ta.scrollTop;
+}
+
 function renderGcodeEditor(text) {
   const lines = text.split('\n');
   gcodeLines = lines;
+  // textareaにも反映
+  const ta = document.getElementById('gcode-textarea');
+  if (ta.value !== text) ta.value = text;
+  updateLineNumbers();
+  // ハイライト行構築
   const container = document.getElementById('gcode-lines');
   container.innerHTML = '';
   lines.forEach((line, idx) => {
@@ -637,7 +709,6 @@ function renderGcodeEditor(text) {
       document.querySelectorAll('.gcode-line').forEach(e=>e.classList.remove('selected'));
       div.classList.add('selected');
       stopSim();
-      // クリックした行に対応するMove indexを探す
       const targetLineNum = idx;
       let found = false;
       for (let i=0; i<parsedMoves.length; i++) {
@@ -649,7 +720,6 @@ function renderGcodeEditor(text) {
         }
       }
       if (!found) { startMoveIdx = 0; currentMoveIdx = 0; }
-      // 工具位置を開始点にセット
       if (parsedMoves[currentMoveIdx]) {
         const m = parsedMoves[Math.max(0,currentMoveIdx-1)];
         if (m) { toolPos.x=m.x||0; toolPos.y=m.y||0; toolPos.z=m.z||10; updateToolMeshPos(); }
@@ -717,6 +787,23 @@ parsedMoves = parseGcode(DEFAULT_GCODE);
 toolPos = {x:0, y:0, z: wpSize.z + 10};
 updateToolMeshPos();
 setStatus('Gコードをロード済み。▶ を押して実行');
+
+// textareaのイベント登録
+const ta = document.getElementById('gcode-textarea');
+ta.addEventListener('input', updateLineNumbers);
+ta.addEventListener('scroll', () => {
+  document.getElementById('line-numbers').scrollTop = ta.scrollTop;
+});
+// Tabキーでインデント挿入
+ta.addEventListener('keydown', (e) => {
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    const s = ta.selectionStart, end = ta.selectionEnd;
+    ta.value = ta.value.substring(0,s) + '  ' + ta.value.substring(end);
+    ta.selectionStart = ta.selectionEnd = s+2;
+    updateLineNumbers();
+  }
+});
 
 </script>
 </body>
